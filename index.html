@@ -68,6 +68,7 @@ td.tot{font-weight:900}
       <div id="holeInfo">파크골프 퍼팅</div>
       <div id="turnInfo"><span class="dot" id="turnDot"></span><span id="turnName"></span></div>
     </div>
+    <button id="viewBtn" style="width:62px;height:42px;font-size:13px;font-weight:700">전체</button>
     <button id="menuBtn" aria-label="메뉴">☰</button>
   </header>
   <canvas id="cv"></canvas>
@@ -103,6 +104,8 @@ td.tot{font-weight:900}
         <li>화면을 눌러 칠 방향을 정해요 (◀ ▶로 미세 조정)</li>
         <li>[스윙 준비]를 누르고 폰을 두 손으로 채 잡듯 쥐어요. 폰 끝이 땅을 향하게.</li>
         <li>"삑" 소리가 나면 뒤로 뺐다가 앞으로 휘둘러요. 빠르게 휘두를수록 멀리 굴러가요.</li>
+        <li>세게 치면 공이 떠서 날아가요. 그린 근처에선 살살 퍼팅하세요.</li>
+        <li>러프(진한 풀)는 공이 잘 안 구르고, 나무에 맞으면 튕겨요. 흰 말뚝(OB) 밖으로 나가면 2벌타예요.</li>
         <li>공이 멈추면 구멍에서 먼 사람부터 쳐요. 폰을 넘겨주세요.</li>
       </ol>
       <div class="warn">폰을 꽉 쥐고, 주변에 사람이나 물건이 없는 곳에서 휘두르세요. 손목 스트랩이 있으면 꼭 끼우세요.</div>
@@ -166,30 +169,140 @@ const BALL_R = 0.05, CUP_R = 0.11;
 const FRICTION = 0.62;   // 잔디 구름 감속 (m/s²)
 const SAND_F = 2.8;      // 모래
 const E_WALL = 0.6, E_BUMP = 0.72;
-const VMAX = 4.6;        // 최대 공 속도
+const VMAX = 4.6;        // 최대 공 속도 (연습 매트)
 const CAPTURE_V = 1.35;  // 이 속도보다 느리면 구멍에 들어감
 const MAX_STROKES = 8;
+// 코스: 세게 치면(FLY_V 넘으면) 공이 떠서 날아갔다 튀면서 떨어짐
+const VMAX_C = 15, FLY_V = 7, GRAV = 9.8, ROLL_G = 9.8*5/7;
+const MU = {green:0.6, fairway:1.05, rough:2.4, ob:2.4};
+const E_TREE = 0.5;
 const COLORS = ['#ffffff', '#ffd84a', '#ff8a7a', '#7ad0ff'];
 
-// ---- 코스 (x 오른쪽, y 아래, 티는 아래·구멍은 위) ----
-// walls: [x1,y1,x2,y2] 사각 벽, circles: [x,y,r] 둥근 장애물, zones: sand/water/slope(a=[ax,ay] m/s²)
+// ---- 코스 (x 오른쪽, y 아래, 티에서 위쪽으로 진행) ----
+// path: 티→핀 가운데 줄(꺾이는 홀은 점 여러 개), fw: 페어웨이 폭, ob: OB 말뚝 사이 폭(m)
+// bumps: [x,y,반지름,높이(m)] 언덕(+)/움푹(-), tilt: [x,y] 전체 기울기, trees: [x,y,줄기 반지름] 직접 둔 나무
 const HOLES = [
-  {name:'몸풀기', par:2, W:4, H:7, tee:[2,6.2], cup:[2,1.2]},
-  {name:'옆 경사', par:2, W:4, H:7.5, tee:[1.4,6.7], cup:[2.5,1.2], zones:[{type:'slope', r:[0,2,4,5.6], a:[0.24,0]}]},
-  {name:'가운데 벽', par:3, W:4, H:8, tee:[2,7.2], cup:[2,1.2], walls:[[0.9,3.9,3.1,4.15]]},
-  {name:'벙커', par:3, W:4, H:8, tee:[2,7.2], cup:[2.6,1.3], zones:[{type:'sand', r:[1.3,2.2,3.7,3.2]}]},
-  {name:'꺾인 길', par:3, W:4.5, H:8, tee:[0.8,7.2], cup:[0.9,1.2], walls:[[0,3.9,3.2,4.15]]},
-  {name:'연못', par:3, W:4, H:8.5, tee:[2,7.7], cup:[2,1.2], zones:[{type:'water', r:[0.65,3.6,3.35,5.0]}]},
-  {name:'통나무 숲', par:3, W:4, H:8, tee:[2,7.2], cup:[2,1.2], circles:[[2,4.2,0.35],[1,3,0.25],[3,3,0.25],[1.15,5.4,0.22],[2.85,5.4,0.22]]},
-  {name:'두 언덕', par:3, W:4, H:8.5, tee:[2,7.7], cup:[2,1.2], zones:[{type:'slope', r:[0,4.6,4,6.6], a:[-0.26,0]}, {type:'slope', r:[0,2.2,4,4.2], a:[0.26,0]}]},
-  {name:'마지막 관문', par:4, W:4.5, H:9, tee:[3.6,8.2], cup:[1,1.2], walls:[[1.2,6.2,4.5,6.45],[0,3.6,3.3,3.85]], zones:[{type:'sand', r:[0.2,2.0,2.4,2.6]}]},
+  {name:'첫 홀', par:3, path:[[0,0],[0,-26]], fw:9, ob:18, bumps:[[3,-12,4,0.15]]},
+  {name:'소나무 길', par:3, path:[[0,0],[2,-16],[5,-33]], fw:7, ob:15, trees:[[-1.6,-12,0.16],[4.4,-21,0.18]]},
+  {name:'오른쪽 꺾임', par:4, path:[[0,0],[0,-27],[16,-40]], fw:8, ob:17, trees:[[5,-25,0.22],[6.2,-26.5,0.18],[4.2,-23.5,0.16]]},
+  {name:'오르막', par:3, path:[[0,0],[0,-30]], fw:8, ob:16, tilt:[0,-0.035], bumps:[[-2,-18,3,0.12]]},
+  {name:'왼쪽 꺾임', par:4, path:[[0,0],[1,-30],[-14,-44]], fw:8, ob:16, trees:[[-4.2,-29,0.2],[-5.5,-30.5,0.17]]},
+  {name:'좁은 숲길', par:3, path:[[0,0],[0,-24]], fw:5, ob:10, treeDensity:1.8},
+  {name:'S자 긴 홀', par:5, path:[[0,0],[6,-20],[-4,-45],[3,-70]], fw:9, ob:18, trees:[[3,-31,0.2],[1,-56,0.18]]},
+  {name:'언덕 넘어', par:4, path:[[0,0],[0,-44]], fw:8, ob:17, bumps:[[0,-21,6,0.55],[3,-30,3,-0.2]]},
+  {name:'마지막 그린', par:3, path:[[0,0],[-3,-32]], fw:8, ob:16, bumps:[[-3,-32,5,0.35]], trees:[[-6,-27,0.2],[0.8,-27,0.18]]},
 ];
-function prepHole(h){
-  if (h._segs) return h;
-  h.walls = h.walls || []; h.circles = h.circles || []; h.zones = h.zones || [];
-  const segs = [[0,0,h.W,0],[h.W,0,h.W,h.H],[h.W,h.H,0,h.H],[0,h.H,0,0]];
-  for (const [x1,y1,x2,y2] of h.walls) segs.push([x1,y1,x2,y1],[x2,y1,x2,y2],[x2,y2,x1,y2],[x1,y2,x1,y1]);
-  h._segs = segs; return h;
+const GREEN_R = 4.5;
+const LIE = {green:'그린', fairway:'페어웨이', rough:'러프', ob:'OB'};
+function h2(ix, iy){ let n = Math.imul(ix|0, 374761393) ^ Math.imul(iy|0, 668265263); n = Math.imul(n^(n>>>13), 1274126177); return ((n^(n>>>16))>>>0)/4294967296; }
+function vnoise(x, y){
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x-ix, fy = y-iy, sx = fx*fx*(3-2*fx), sy = fy*fy*(3-2*fy);
+  const a = h2(ix,iy), b = h2(ix+1,iy), c = h2(ix,iy+1), d = h2(ix+1,iy+1);
+  return (a + (b-a)*sx + (c-a)*sy + (a-b-c+d)*sx*sy)*2 - 1;
+}
+function pathInfo(h, x, y){
+  let best = 1e9, bs = 0, bpx = 0, bpy = 0, acc = 0;
+  for (const [x1,y1,x2,y2,len] of h.segs){
+    const dx = x2-x1, dy = y2-y1, t = clamp(((x-x1)*dx+(y-y1)*dy)/(len*len), 0, 1);
+    const px = x1+dx*t, py = y1+dy*t, d = Math.hypot(x-px, y-py);
+    if (d < best){ best = d; bs = acc+t*len; bpx = px; bpy = py; }
+    acc += len;
+  }
+  return {d:best, s:bs, px:bpx, py:bpy};
+}
+function pathPointAt(h, s){
+  for (const [x1,y1,x2,y2,len] of h.segs){ if (s <= len) return [x1+(x2-x1)*s/len, y1+(y2-y1)*s/len]; s -= len; }
+  return h.cup.slice();
+}
+function region(h, x, y){
+  if (Math.hypot(x-h.cup[0], y-h.cup[1]) < GREEN_R) return 'green';
+  const d = pathInfo(h, x, y).d;
+  return d <= h.fw/2 ? 'fairway' : d <= h.ob/2 ? 'rough' : 'ob';
+}
+function heightAt(h, x, y, rough){
+  let z = h.tilt[0]*x + h.tilt[1]*y;
+  for (const [bx,by,br,ba] of h.bumps){ const d2 = ((x-bx)**2+(y-by)**2)/(br*br); if (d2<9) z += ba*Math.exp(-d2); }
+  z += 0.09*vnoise(x/7+h.seed, y/7) + 0.008*vnoise(x/1.5+50, y/1.5);
+  if (rough) z += 0.035*vnoise(x/0.7+100, y/0.7);   // 러프는 울퉁불퉁
+  return z;
+}
+function gradAt(h, x, y, rough){
+  const e = 0.05;
+  return [(heightAt(h,x+e,y,rough)-heightAt(h,x-e,y,rough))/(2*e), (heightAt(h,x,y+e,rough)-heightAt(h,x,y-e,rough))/(2*e)];
+}
+function prepCourse(h){
+  if (h.segs) return h;
+  const idx = HOLES.indexOf(h);
+  h.segs = []; let L = 0;
+  for (let i=1;i<h.path.length;i++){ const [x1,y1] = h.path[i-1], [x2,y2] = h.path[i], len = Math.hypot(x2-x1,y2-y1); h.segs.push([x1,y1,x2,y2,len]); L += len; }
+  h.len = L; h.tee = h.path[0]; h.cup = h.path[h.path.length-1];
+  h.tilt = h.tilt || [0,0]; h.bumps = h.bumps || []; h.seed = idx*17.3;
+  // 나무: 직접 둔 것 + 러프와 OB 바깥 숲에 흩어 심기 (줄기는 가늘어서 맞으면 튕김)
+  const trees = (h.trees||[]).map(t=>({x:t[0], y:t[1], r:t[2]}));
+  const add = (x,y,r) => {
+    if (Math.hypot(x-h.cup[0],y-h.cup[1]) < GREEN_R+1.2 || Math.hypot(x-h.tee[0],y-h.tee[1]) < 3) return;
+    if (pathInfo(h,x,y).d < h.fw/2+0.5) return;
+    trees.push({x, y, r});
+  };
+  const dens = h.treeDensity || 1; let k = idx*1000;
+  for (let s=3; s<L-1; s+=2.6){
+    const p = pathPointAt(h,s), q = pathPointAt(h,Math.min(L,s+0.5));
+    let nx = -(q[1]-p[1]), ny = q[0]-p[0]; const nl = Math.hypot(nx,ny)||1; nx/=nl; ny/=nl;
+    for (const sd of [-1,1]){
+      k++; const r1 = h2(k,7), r2 = h2(k,13), r3 = h2(k,29), r4 = h2(k,41);
+      if (r1 < 0.3*dens){ const off = h.fw/2+0.9+r2*Math.max(0.3, h.ob/2-h.fw/2-1.3); add(p[0]+nx*sd*off+(r3-0.5)*1.5, p[1]+ny*sd*off+(r4-0.5)*1.5, 0.1+r2*0.12); }
+      if (r3 < 0.75){ const off = h.ob/2+1.4+r4*5; add(p[0]+nx*sd*off, p[1]+ny*sd*off+(r1-0.5)*2, 0.14+r3*0.16); }
+    }
+  }
+  for (const t of trees) t.cr = 0.9 + t.r*7;   // 잎 반지름
+  h.treesAll = trees;
+  // OB 말뚝: 경계를 따라 약 4m마다
+  const stakes = [], half = h.ob/2;
+  const okStake = (x,y) => Math.abs(pathInfo(h,x,y).d - half) < 0.05;
+  for (const [x1,y1,x2,y2,len] of h.segs){
+    const ux = (x2-x1)/len, uy = (y2-y1)/len;
+    for (let s=0; s<=len; s+=4) for (const sd of [-1,1]){ const x = x1+ux*s - uy*sd*half, y = y1+uy*s + ux*sd*half; if (okStake(x,y)) stakes.push([x,y]); }
+  }
+  for (const [ex,ey] of [h.tee, h.cup]) for (let a=0; a<Math.PI*2; a+=4/half){ const x = ex+Math.cos(a)*half, y = ey+Math.sin(a)*half; if (okStake(x,y)) stakes.push([x,y]); }
+  h.stakes = stakes;
+  // 바닥 그림 미리 그려 두기
+  const xs = h.path.map(p=>p[0]), ys = h.path.map(p=>p[1]), M = half+7;
+  h.bx0 = Math.min(...xs)-M; h.by0 = Math.min(...ys)-M; h.bw = Math.max(...xs)+M-h.bx0; h.bh = Math.max(...ys)+M-h.by0;
+  buildTerrain(h);
+  return h;
+}
+function buildTerrain(h){
+  const R = 12, W = Math.ceil(h.bw*R), H = Math.ceil(h.bh*R);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d'), img = g.createImageData(W, H), d = img.data;
+  const hz = new Float32Array(W*H), reg = new Uint8Array(W*H), sArr = new Float32Array(W*H), dArr = new Float32Array(W*H);
+  for (let py=0; py<H; py++) for (let px=0; px<W; px++){
+    const x = h.bx0+(px+0.5)/R, y = h.by0+(py+0.5)/R, i = py*W+px;
+    const pi = pathInfo(h,x,y), dc = Math.hypot(x-h.cup[0], y-h.cup[1]);
+    const r = dc<GREEN_R ? 0 : pi.d<=h.fw/2 ? 1 : pi.d<=h.ob/2 ? 2 : 3;
+    reg[i] = r; sArr[i] = pi.s; dArr[i] = pi.d;
+    hz[i] = heightAt(h, x, y, false);   // 그림자는 큰 지형만 (러프 잔 울퉁불퉁은 색 얼룩으로)
+  }
+  for (let py=0; py<H; py++) for (let px=0; px<W; px++){
+    const i = py*W+px, x = h.bx0+(px+0.5)/R, y = h.by0+(py+0.5)/R, r = reg[i];
+    const gx = (hz[py*W+Math.min(W-1,px+1)] - hz[py*W+Math.max(0,px-1)])*R/2;
+    const gy = (hz[Math.min(H-1,py+1)*W+px] - hz[Math.max(0,py-1)*W+px])*R/2;
+    const ex = gx*6, ey = gy*6;
+    let light = (0.6*ex + 0.6*ey + 0.5) / (Math.sqrt(ex*ex+ey*ey+1)*0.5);
+    light = clamp(light, 0.6, 1.4);
+    let col;
+    const dc = Math.hypot(x-h.cup[0], y-h.cup[1]);
+    if (r===0) col = dc > GREEN_R-0.5 ? [104,180,92] : [120,196,104];
+    else if (r===1){ const band = Math.floor(sArr[i]/2.5)%2; col = band ? [86,160,78] : [97,172,88]; const n = vnoise(x*1.5,y*1.5)*5; col = col.map(v=>v+n); }
+    else if (r===2){ const n = vnoise(x*1.6+9,y*1.6)*8 + (h2(px*7+py,py*3+px)*14-7); col = [64+n, 118+n, 52+n*0.6]; }
+    else { const n = vnoise(x*0.9+3,y*0.9)*8 + (h2(px*5+py,py*9+px)*12-6); col = [48+n, 74+n, 40+n*0.5]; }
+    if (Math.abs(x-h.tee[0])<1.1 && Math.abs(y-h.tee[1])<0.8) col = [74,148,80];   // 티 매트
+    if (Math.abs(dArr[i]-h.ob/2) < 0.05) col = [235,235,228];                          // OB 선
+    const o = i*4;
+    d[o] = clamp(col[0]*light,0,255); d[o+1] = clamp(col[1]*light,0,255); d[o+2] = clamp(col[2]*light,0,255); d[o+3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  h.terr = c;
 }
 // 연습 매트: 폭 0.9m, 끝에 구멍, 구멍 뒤 받침대만 막혀 있고 옆·뒤는 열려 있음
 const MAT_W = 0.9;
@@ -229,6 +342,11 @@ let lastWallSnd = 0;
 const sndWall = v => { const n=performance.now(); if(n-lastWallSnd<60) return; lastWallSnd=n; tone(420, 0.05, 'square', clamp(v*0.06,0.02,0.15)); };
 const sndCup = () => { tone(330, 0.09, 'triangle', 0.35); tone(220, 0.18, 'triangle', 0.35, 0.07); noise(0.12, 0.25, 0.04, 400); tone(880,0.25,'sine',0.15,0.3); tone(1320,0.35,'sine',0.12,0.42); };
 const sndSplash = () => { noise(0.45, 0.4, 0, 300); };
+let lastLand = 0;
+const sndLand = v => { const n=performance.now(); if(n-lastLand<80) return; lastLand=n; noise(0.06, clamp(v*0.12,0.05,0.35), 0, 200); tone(140,0.07,'sine',clamp(v*0.08,0.04,0.25)); };
+let lastTree = 0;
+const sndTree = v => { const n=performance.now(); if(n-lastTree<80) return; lastTree=n; tone(760,0.04,'square',clamp(v*0.05,0.04,0.18)); tone(380,0.06,'triangle',0.1,0.01); };
+const sndOB = () => { tone(520,0.15,'square',0.12); tone(390,0.25,'square',0.12,0.16); };
 const sndBeep = () => tone(880, 0.18, 'sine', 0.3);
 const vib = p => { try{ navigator.vibrate && navigator.vibrate(p); }catch(e){} };
 
@@ -244,12 +362,20 @@ function newGame(){
   startHole(0);
 }
 function startHole(i){
-  G.hole = i; const h = prepHole(HOLES[i]); const n = G.players.length;
-  G.balls = G.players.map((p,k)=>({x:h.tee[0]+(k-(n-1)/2)*0.16, y:h.tee[1], vx:0, vy:0, strokes:0, done:false, prev:null}));
-  G.cur = 0; G.phase = 'aim'; setAimToCup(); updateHud();
-  showBanner(`${i+1}번 홀 · ${h.name}<br><small>파 ${h.par}</small>`, 1500);
+  G.hole = i; const h = prepCourse(HOLES[i]); const n = G.players.length;
+  G.balls = G.players.map((p,k)=>({x:h.tee[0]+(k-(n-1)/2)*0.3, y:h.tee[1], z:0, vx:0, vy:0, vz:0, strokes:0, done:false, prev:null}));
+  G.cur = 0; G.phase = 'aim'; G.full = false;
+  G.cam = {x:(h.bx0+h.bw/2), y:(h.by0+h.bh/2), s:0};   // 처음엔 홀 전체를 보여 주고 공 쪽으로 다가감
+  setAimToCup(); updateHud();
+  showBanner(`${i+1}번 홀 · ${h.name}<br><small>파 ${h.par} · ${Math.round(h.len)}m</small>`, 1800);
 }
-function setAimToCup(){ const b=G.balls[G.cur], c=curHole().cup; G.aim = Math.atan2(c[1]-b.y, c[0]-b.x); }
+// 기본 방향: 핀이 가까우면 핀, 멀면 코스를 따라 20m쯤 앞 지점 (꺾인 홀에서 나무·OB로 바로 안 가게)
+function setAimToCup(){
+  const b = G.balls[G.cur], h = curHole();
+  let tx = h.cup[0], ty = h.cup[1];
+  if (!G.mat && Math.hypot(tx-b.x, ty-b.y) > 22){ const s = pathInfo(h,b.x,b.y).s; [tx,ty] = pathPointAt(h, Math.min(h.len, s+20)); }
+  G.aim = Math.atan2(ty-b.y, tx-b.x);
+}
 function nextTurn(){
   const h = curHole();
   const live = G.balls.map((b,i)=>i).filter(i=>!G.balls[i].done);
@@ -262,7 +388,8 @@ function nextTurn(){
 function shoot(speed, devDeg){
   const b = G.balls[G.cur]; b.prev = {x:b.x, y:b.y};
   const a = G.aim + devDeg*Math.PI/180;
-  b.vx = Math.cos(a)*speed; b.vy = Math.sin(a)*speed; b.strokes++;
+  b.vx = Math.cos(a)*speed; b.vy = Math.sin(a)*speed; b.strokes++; b.z = 0; b.vz = 0;
+  if (!G.mat && speed > FLY_V){ b.vz = (speed-FLY_V)*0.55; b.z = 0.001; }   // 세게 맞으면 뜸
   G.phase = 'rolling'; sndHit(); vib(35); updateHud();
 }
 function scoreName(s, par){
@@ -323,9 +450,17 @@ function onRollEnd(r){
     showBanner(`${G.players.length>1?p.name+' ':''}홀인!<br>${b.strokes}타 · ${scoreName(b.strokes,h.par)}`, 1900);
     setTimeout(nextTurn, 2000); return;
   }
-  if (r==='water'){ b.strokes++; b.x=b.prev.x; b.y=b.prev.y; b.vx=b.vy=0; sndSplash(); vib(250); showBanner('풍덩! 1벌타<br><small>친 자리로 돌아가요</small>', 1500); }
-  if (!b.done && b.strokes>=MAX_STROKES){ b.done=true; b.gaveUp=true; b.strokes=MAX_STROKES; showBanner(`${MAX_STROKES}타 제한<br><small>이번 홀은 여기까지</small>`, 1500); setTimeout(nextTurn, 1600); return; }
-  setTimeout(nextTurn, r==='water'?1600:650);
+  // OB: 2벌타, 공이 나간 자리 근처 코스 안쪽(말뚝에서 1.2m 안)에 놓고 다시 침
+  if (r==='stop' && region(h,b.x,b.y)==='ob') r = 'ob';
+  if (r==='ob'){
+    b.strokes += 2;
+    const pi = pathInfo(h,b.x,b.y); let nx = b.x-pi.px, ny = b.y-pi.py; const nl = Math.hypot(nx,ny)||1, off = Math.max(0, h.ob/2-1.2);
+    b.x = pi.px+nx/nl*off; b.y = pi.py+ny/nl*off; b.vx=b.vy=b.vz=b.z=0;
+    sndOB(); vib(250); showBanner('OB! 2벌타<br><small>나간 자리 근처에서 다시 쳐요</small>', 1700);
+  }
+  const maxS = h.par + 5;
+  if (!b.done && b.strokes>=maxS){ b.done=true; b.gaveUp=true; b.strokes=maxS; showBanner(`${maxS}타 제한<br><small>이번 홀은 여기까지</small>`, 1500); setTimeout(nextTurn, r==='ob'?1900:1600); return; }
+  setTimeout(nextTurn, r==='ob'?1800:650);
 }
 function holeComplete(){
   G.players.forEach((p,i)=>p.scores[G.hole]=G.balls[i].strokes);
@@ -385,6 +520,60 @@ function collideCircle(b, cx,cy,r){
     if (vn<0){ b.vx-=(1+E_BUMP)*vn*nx; b.vy-=(1+E_BUMP)*vn*ny; return -vn; }
   }
   return 0;
+}
+// 나무 줄기에 맞으면 튕김 (살짝 엉뚱한 방향으로)
+function hitTrees(b, h){
+  let imp = 0;
+  for (const t of h.treesAll){
+    const dx = b.x-t.x, dy = b.y-t.y; if (Math.abs(dx)>1 || Math.abs(dy)>1) continue;
+    const d = Math.hypot(dx,dy), R = t.r+BALL_R;
+    if (d<R && d>1e-9){
+      const nx = dx/d, ny = dy/d; b.x = t.x+nx*R; b.y = t.y+ny*R;
+      const vn = b.vx*nx+b.vy*ny;
+      if (vn<0){
+        b.vx -= (1+E_TREE)*vn*nx; b.vy -= (1+E_TREE)*vn*ny;
+        const a = (Math.random()-0.5)*0.4, c = Math.cos(a), s = Math.sin(a), vx = b.vx;
+        b.vx = vx*c - b.vy*s; b.vy = vx*s + b.vy*c; imp = Math.max(imp, -vn);
+      }
+    }
+  }
+  if (imp>0.2){ sndTree(imp); vib(20); }
+}
+function stepCourse(b, h, dt){
+  // 공중: 마찰 없이 날아가다 떨어지면 튐 (러프는 덜 튐)
+  if (b.z>0 || b.vz>0){
+    b.vz -= GRAV*dt; b.x += b.vx*dt; b.y += b.vy*dt; b.z += b.vz*dt;
+    if (b.z < 1.2) hitTrees(b, h);
+    if (b.z <= 0){
+      b.z = 0; const reg = region(h,b.x,b.y), v = -b.vz;
+      if (v > 1.0){
+        const rough = reg==='rough'||reg==='ob';
+        b.vz = v*(rough?0.22:0.33); const k = rough?0.6:0.8; b.vx*=k; b.vy*=k;
+        sndLand(v); if (b.vz < 0.6) b.vz = 0;
+      } else b.vz = 0;
+    }
+    return null;
+  }
+  const reg = region(h,b.x,b.y);
+  if (reg==='ob' && pathInfo(h,b.x,b.y).d > h.ob/2+0.4) return 'ob';
+  const mu = MU[reg], rough = reg==='rough'||reg==='ob';
+  const [gx,gy] = gradAt(h, b.x, b.y, rough);
+  let ax = -ROLL_G*gx, ay = -ROLL_G*gy;
+  const slopeA = Math.hypot(ax, ay);
+  const cx = h.cup[0], cy = h.cup[1], dc = Math.hypot(cx-b.x, cy-b.y);
+  if (dc < CUP_R){
+    const sp = Math.hypot(b.vx, b.vy);
+    if (dc < CUP_R*0.85 && sp < CAPTURE_V) return 'in';
+    if (dc>1e-4){ ax += (cx-b.x)/dc*5; ay += (cy-b.y)/dc*5; }
+    if (!b.overCup){ b.overCup = true; if (sp>=CAPTURE_V){ b.vx*=0.86; b.vy*=0.86; } }
+  } else b.overCup = false;
+  b.vx += ax*dt; b.vy += ay*dt;
+  let sp = Math.hypot(b.vx, b.vy);
+  if (sp>0){ const ns = Math.max(0, sp-mu*dt); b.vx*=ns/sp; b.vy*=ns/sp; sp = ns; }
+  b.x += b.vx*dt; b.y += b.vy*dt;
+  hitTrees(b, h);
+  if (sp<0.05 && slopeA<mu*0.7 && dc>=CUP_R){ b.vx=b.vy=0; return 'stop'; }
+  return null;
 }
 function step(b, h, dt){
   let mu = FRICTION, ax = 0, ay = 0;
@@ -474,15 +663,18 @@ function feed(v, mag, now){
     }
   }
 }
+// 연습 매트는 짧은 퍼팅용, 코스는 길게 (약하게 치면 퍼팅, 세게 치면 수십 m)
+function speedFromFrac(f){ return Math.max(0.15, G && !G.mat ? VMAX_C*Math.pow(f,1.6) : VMAX*Math.pow(f,1.1)); }
 function swingText(peak, speed, dev){
-  const d = speed*speed/(2*FRICTION);
-  return `스윙 ${Math.round(peak)}°/s → 공 ${speed.toFixed(1)}m/s (평지 약 ${d.toFixed(1)}m)` +
+  const course = G && !G.mat, fly = course && speed > FLY_V;
+  const d = speed*speed/(2*(course ? MU.fairway : FRICTION));
+  return `스윙 ${Math.round(peak)}°/s → 공 ${speed.toFixed(1)}m/s ` + (fly ? '(세게 맞아 공이 떠요)' : `(${course?'페어웨이':'평지'} 약 ${d.toFixed(1)}m)`) +
     (dev ? ` · ${dev>0?'오른쪽':'왼쪽'}으로 ${Math.abs(dev).toFixed(1)}° 빠짐` : '');
 }
 function swingHit(peak, twist, path=0){
   SW.state = 'off'; clearSwingTimers();
   const frac = clamp((peak-45)/(fullPeak()-45), 0, 1);
-  const speed = Math.max(0.15, VMAX*Math.pow(frac, 1.1));
+  const speed = speedFromFrac(frac);
   // 방향 = 채 얼굴 비틀림(주) + 궤도 기울기(부). 연습 매트는 항상 센서 방향을 씀
   const lvl = G && G.mat && !SW.practice ? 2 : +settings.dev;
   let dev = 0;
@@ -563,6 +755,7 @@ function draw(t){
   const {cw, ch, dpr} = view;
   ctx.setTransform(dpr,0,0,dpr,0,0); ctx.fillStyle = '#173222'; ctx.fillRect(0,0,cw,ch);
   if (!G) return;
+  if (!G.mat) return drawCourse(t);
   const h = curHole(), m = 0.3;
   const s = Math.min(cw/(h.W+2*m), ch/(h.H+2*m)); view.s = s; view.ox = (cw-h.W*s)/2; view.oy = (ch-h.H*s)/2;
   ctx.setTransform(dpr*s,0,0,dpr*s,dpr*view.ox,dpr*view.oy);
@@ -650,6 +843,89 @@ function draw(t){
   });
 }
 
+// ---- 코스 화면: 공과 핀이 함께 보이게 카메라가 따라감 ----
+function drawCourse(t){
+  const {cw, ch, dpr} = view, h = curHole(), b = G.balls[G.cur];
+  const fitAll = Math.min(cw/h.bw, ch/h.bh);
+  let x0, y0, x1, y1;
+  if (G.full || G.phase==='between'){ x0 = h.bx0+4; y0 = h.by0+4; x1 = h.bx0+h.bw-4; y1 = h.by0+h.bh-4; }
+  else {
+    x0 = Math.min(b.x, h.cup[0]); x1 = Math.max(b.x, h.cup[0]); y0 = Math.min(b.y, h.cup[1]); y1 = Math.max(b.y, h.cup[1]);
+    const m = 3.5; x0-=m; x1+=m; y0-=m; y1+=m;
+    const minSpan = 9;
+    if (x1-x0 < minSpan){ const c=(x0+x1)/2; x0=c-minSpan/2; x1=c+minSpan/2; }
+    if (y1-y0 < minSpan){ const c=(y0+y1)/2; y0=c-minSpan/2; y1=c+minSpan/2; }
+  }
+  const ts = clamp(Math.min(cw/(x1-x0), ch/(y1-y0)), fitAll, cw/6);
+  const cam = G.cam, k = 1-Math.exp(-frameDt*3.5);
+  if (!cam.s) cam.s = fitAll;
+  cam.s += (ts-cam.s)*k; cam.x += ((x0+x1)/2-cam.x)*k; cam.y += ((y0+y1)/2-cam.y)*k;
+  const s = cam.s; view.s = s; view.ox = cw/2 - cam.x*s; view.oy = ch/2 - cam.y*s;
+  ctx.fillStyle = '#22361f'; ctx.fillRect(0,0,cw,ch);
+  ctx.setTransform(dpr*s,0,0,dpr*s,dpr*view.ox,dpr*view.oy);
+  const px = 1/s;
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(h.terr, h.bx0, h.by0, h.bw, h.bh);
+  // 나무 그림자·잎
+  ctx.fillStyle = 'rgba(0,0,0,.18)';
+  for (const tr of h.treesAll){ ctx.beginPath(); ctx.ellipse(tr.x+tr.cr*0.35, tr.y+tr.cr*0.45, tr.cr, tr.cr*0.8, 0, 0, 7); ctx.fill(); }
+  for (const tr of h.treesAll){
+    ctx.fillStyle = 'rgba(24,64,30,.72)'; ctx.beginPath(); ctx.arc(tr.x, tr.y, tr.cr, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(10,30,12,.5)'; ctx.lineWidth = 1.5*px; ctx.stroke();
+    ctx.fillStyle = 'rgba(96,160,74,.45)'; ctx.beginPath(); ctx.arc(tr.x-tr.cr*0.28, tr.y-tr.cr*0.28, tr.cr*0.55, 0, 7); ctx.fill();
+  }
+  for (const tr of h.treesAll){
+    ctx.fillStyle = '#5b3a22'; ctx.beginPath(); ctx.arc(tr.x, tr.y, Math.max(tr.r, 2*px), 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = px; ctx.stroke();
+  }
+  // OB 말뚝 (흰색)
+  const sr = Math.max(0.07, 2.5*px);
+  for (const [x,y] of h.stakes){ ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.arc(x+sr*0.5,y+sr*0.6,sr,0,7); ctx.fill(); ctx.fillStyle = '#fafafa'; ctx.beginPath(); ctx.arc(x,y,sr,0,7); ctx.fill(); }
+  // 티 표시
+  ctx.fillStyle = '#d33'; for (const sd of [-1,1]){ ctx.beginPath(); ctx.arc(h.tee[0]+sd*1.0, h.tee[1]-0.6, Math.max(0.08,2.5*px), 0, 7); ctx.fill(); }
+  // 컵과 깃발
+  const [cx,cy] = h.cup, cr = Math.max(CUP_R, 3*px);
+  ctx.fillStyle = '#0c1a0f'; ctx.beginPath(); ctx.arc(cx,cy,cr,0,7); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = px; ctx.stroke();
+  const near = Math.hypot(b.x-cx, b.y-cy) < 2.5;
+  ctx.globalAlpha = near ? 0.35 : 1;
+  const pole = Math.max(1.4, 38*px), fw = pole*0.45, wave = Math.sin(t*0.004)*pole*0.04;
+  ctx.strokeStyle = '#eee'; ctx.lineWidth = Math.max(0.03, 2*px); ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx,cy-pole); ctx.stroke();
+  ctx.fillStyle = '#e8453c'; ctx.beginPath(); ctx.moveTo(cx,cy-pole); ctx.lineTo(cx+fw,cy-pole*0.88+wave); ctx.lineTo(cx,cy-pole*0.72); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+  // 조준선 (화면에서 일정한 길이)
+  if (G.phase==='aim'){
+    const p = settings.mode==='touch' ? (drag ? drag.p : 0) : 1;
+    const L = (settings.mode==='touch' ? 30 + p*130 : 110)*px;
+    const col = G.players[G.cur].color;
+    ctx.strokeStyle = col; ctx.globalAlpha = 0.9; ctx.lineWidth = 2.5*px; ctx.setLineDash([7*px,6*px]);
+    const ex = b.x+Math.cos(G.aim)*L, ey = b.y+Math.sin(G.aim)*L;
+    ctx.beginPath(); ctx.moveTo(b.x,b.y); ctx.lineTo(ex,ey); ctx.stroke(); ctx.setLineDash([]);
+    ctx.save(); ctx.translate(ex,ey); ctx.rotate(G.aim); ctx.fillStyle = col;
+    ctx.beginPath(); ctx.moveTo(9*px,0); ctx.lineTo(-5*px,-6*px); ctx.lineTo(-5*px,6*px); ctx.closePath(); ctx.fill(); ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+  // 공: 뜨면 그림자와 떨어져 보이고 조금 커짐
+  G.balls.forEach((bl,i)=>{
+    if (bl.done) return;
+    const R = Math.max(BALL_R, 4.5*px) * (1 + (bl.z||0)*0.25), lift = (bl.z||0)*0.8;
+    ctx.fillStyle = `rgba(0,0,0,${bl.z>0.05?0.22:0.32})`; ctx.beginPath(); ctx.ellipse(bl.x+R*0.3,bl.y+R*0.4,Math.max(BALL_R,4.5*px),Math.max(BALL_R,4.5*px)*0.8,0,0,7); ctx.fill();
+    ctx.fillStyle = G.players[i].color; ctx.beginPath(); ctx.arc(bl.x, bl.y-lift, R, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1.2*px; ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.arc(bl.x-R*0.3, bl.y-lift-R*0.34, R*0.3, 0, 7); ctx.fill();
+    if (i===G.cur && G.phase==='aim'){
+      ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2*px;
+      ctx.beginPath(); ctx.arc(bl.x, bl.y, R+(5+Math.sin(t*0.006)*2)*px, 0, 7); ctx.stroke();
+    }
+  });
+  // 남은 거리 (화면 글자)
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  if (G.phase==='rolling' && b.z>0.05){
+    ctx.font = '800 15px system-ui,sans-serif'; ctx.textAlign='center';
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.strokeText('공이 떴어요!', cw/2, 24);
+    ctx.fillStyle = '#fff'; ctx.fillText('공이 떴어요!', cw/2, 24);
+  }
+}
 function drawMat(h, s, t){
   const px = 1/s, W = h.W, H = h.H;
   // 공 돌아오는 레일(오른쪽)
@@ -686,12 +962,12 @@ function drawMat(h, s, t){
 }
 
 // ---- 메인 루프 ----
-let lastT = performance.now(), acc = 0;
+let lastT = performance.now(), acc = 0, frameDt = 0.016;
 function frame(t){
-  const dt = Math.min(0.05, (t-lastT)/1000); lastT = t;
+  const dt = Math.min(0.05, (t-lastT)/1000); lastT = t; frameDt = dt;
   if (G && G.phase==='rolling'){
     acc += dt; const H = 1/240;
-    while (acc>=H){ acc-=H; const r = step(G.balls[G.cur], curHole(), H); if (r){ acc=0; onRollEnd(r); break; } }
+    while (acc>=H){ acc-=H; const r = (G.mat?step:stepCourse)(G.balls[G.cur], curHole(), H); if (r){ acc=0; onRollEnd(r); break; } }
   } else acc = 0;
   if (G && G.phase==='return') updateReturn(t);
   draw(t); requestAnimationFrame(frame);
@@ -702,6 +978,7 @@ function updateHud(){
   if (!G) return;
   const h = curHole(), p = G.players[G.cur], b = G.balls[G.cur];
   const mat = !!G.mat, touch0 = settings.mode==='touch';
+  $('viewBtn').hidden = mat;
   $('aimRow').hidden = mat; $('matRow').hidden = !mat; $('matStatus').hidden = !mat; $('matMeter').hidden = !mat || touch0;
   if (mat){
     const st = G.stats;
@@ -719,13 +996,16 @@ function updateHud(){
     return;
   }
   $('swingBtn').textContent = '스윙 준비'; $('swingBtn').style.background = ''; $('swingBtn').style.color = '';
-  $('holeInfo').textContent = `${G.hole+1}/${HOLES.length}홀 · ${h.name} · 파 ${h.par}`;
+  $('holeInfo').textContent = `${G.hole+1}/${HOLES.length}홀 · ${h.name} · 파 ${h.par} · ${Math.round(h.len)}m`;
   $('turnName').textContent = `${p.name} 차례 · ${b.strokes+(G.phase==='aim'?1:0)}타째`;
   $('turnDot').style.background = p.color;
   const touch = settings.mode==='touch';
   $('swingBtn').hidden = touch;
   $('swingBtn').disabled = G.phase!=='aim';
-  $('hint').textContent = touch ? '공 반대쪽으로 끌어 당겼다 놓으면 쳐요' : '화면을 눌러 칠 방향을 정하세요';
+  $('viewBtn').textContent = G.full ? '공 보기' : '전체';
+  const togo = Math.hypot(b.x-h.cup[0], b.y-h.cup[1]);
+  const lie = `핀까지 ${togo<10?togo.toFixed(1):Math.round(togo)}m · ${LIE[region(h,b.x,b.y)]}`;
+  $('hint').innerHTML = `<b style="color:#eef5ee;font-size:15px">${lie}</b><br>` + (touch ? '공 반대쪽으로 당겼다 놓기' : '화면을 눌러 방향 정하기');
 }
 let drag = null;
 function toWorld(e){ const r = cv.getBoundingClientRect(); return {x:(e.clientX-r.left-view.ox)/view.s, y:(e.clientY-r.top-view.oy)/view.s}; }
@@ -749,7 +1029,7 @@ function endDrag(){
   if (!drag) return;
   const d = drag; drag = null;
   if (!d.aim && G && G.phase==='aim'){
-    if (d.p>0.03){ const speed = Math.max(0.15, VMAX*Math.pow(d.p,1.1)); $('lastShot').textContent = `힘 ${Math.round(d.p*100)}% → 공 ${speed.toFixed(1)}m/s`; shoot(speed, 0); }
+    if (d.p>0.03){ const speed = speedFromFrac(d.p); $('lastShot').textContent = `힘 ${Math.round(d.p*100)}% → 공 ${speed.toFixed(1)}m/s`; shoot(speed, 0); }
     else updateHud();
   }
 }
@@ -832,6 +1112,7 @@ $('matBtn').onclick = async () => {
   keepAwake();
   $('startScreen').hidden = true; resize(); G = null; startMat(settings.matDist || 3);
 };
+$('viewBtn').onclick = () => { if (G && !G.mat){ G.full = !G.full; updateHud(); } };
 $('menuBtn').onclick = () => {
   if (!G) return;
   $('settingsMenu').appendChild($('settings')); renderSettings();
