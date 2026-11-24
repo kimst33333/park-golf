@@ -109,7 +109,7 @@ td.tot{font-weight:900}
 
 <!-- 설정 (시작 화면과 메뉴가 같이 씀) -->
 <div id="settings" style="display:flex;flex-direction:column;gap:10px">
-  <div class="row" id="sensRow"><span>스윙 민감도</span><input type="range" id="sens" min="0.5" max="2" step="0.1"><b id="sensVal" style="width:48px;text-align:right"></b></div>
+  <div class="row" id="sensRow"><span>스윙 민감도</span><input type="range" id="sens" min="0.5" max="3" step="0.1"><b id="sensVal" style="width:48px;text-align:right"></b></div>
   <div class="row" id="devRow"><span>방향 흔들림</span><select id="dev"><option value="0">반영 안 함</option><option value="1">약하게</option><option value="2">보통</option></select></div>
   <div class="row" id="flipRow"><span></span><label style="display:flex;gap:8px;align-items:center;font-size:13.5px;color:#b8d6c1"><input type="checkbox" id="flip"> 흔들림 방향 좌우 반대로</label></div>
   <p class="muted" id="setHint" style="font-size:12.5px">민감도를 올리면 살살 휘둘러도 멀리 가요. 방향 흔들림은 휘두를 때 손목이 비틀린 만큼 공이 옆으로 빠지는 기능이에요.</p>
@@ -361,7 +361,7 @@ function step(b, h, dt){
 // 가장 크게 움직인 축을 스윙 축으로 보고, 한쪽 방향 덩어리(백스윙) 다음
 // 반대 방향 덩어리(다운스윙)가 오면 그 덩어리의 최고 속도를 세기로 씀.
 const START_TH = 40, LOBE_TH = 30, MIN_PEAK = 70;
-const fullPeak = () => 650 / settings.sens;
+const fullPeak = () => 520 / settings.sens;
 const SW = {state:'off', practice:false, buf:[], started:false, si:0, lastActive:0, armT:0, peak:0, timers:[]};
 let lastMotion = 0, sensorOn = false;
 function onMotion(e){
