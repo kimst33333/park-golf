@@ -26,6 +26,8 @@ button:active{filter:brightness(1.25)}
 .big{height:58px;font-size:20px;font-weight:800;background:#3fae62;color:#062012;width:100%}
 .big:disabled{background:#26392d;color:#6f8a78}
 .sub{height:46px;font-size:16px;font-weight:700;width:100%}
+#matStatus{text-align:center;font-size:17px;font-weight:800;min-height:24px}
+#matRow .seg button{height:36px}
 #lastShot{font-size:12.5px;color:#9cc3a8;text-align:center;min-height:16px}
 .overlay{position:fixed;inset:0;background:rgba(6,16,10,.96);display:flex;flex-direction:column;align-items:center;padding:calc(24px + env(safe-area-inset-top)) 20px 24px;z-index:10;overflow-y:auto;touch-action:pan-y}
 .panel{width:100%;max-width:440px;display:flex;flex-direction:column;gap:12px;margin:auto 0}
@@ -71,6 +73,9 @@ td.tot{font-weight:900}
   <canvas id="cv"></canvas>
   <footer id="controls">
     <div id="aimRow"><button id="aimL" aria-label="왼쪽으로">◀</button><span id="hint">화면을 눌러 칠 방향을 정하세요</span><button id="aimR" aria-label="오른쪽으로">▶</button></div>
+    <div id="matRow" hidden><div class="seg" id="matDistSeg"><button data-d="2">2m</button><button data-d="3">3m</button><button data-d="4">4m</button><button data-d="5">5m</button></div></div>
+    <div id="matStatus" hidden></div>
+    <div class="meter" id="matMeter" hidden style="height:14px"><i id="matMeterFill"></i></div>
     <button id="swingBtn" class="big">스윙 준비</button>
     <div id="lastShot"></div>
   </footer>
@@ -103,7 +108,9 @@ td.tot{font-weight:900}
       <div class="warn">폰을 꽉 쥐고, 주변에 사람이나 물건이 없는 곳에서 휘두르세요. 손목 스트랩이 있으면 꼭 끼우세요.</div>
     </div>
     <div class="warn" id="secureWarn" hidden>지금 주소가 https가 아니라서 폰 센서를 쓸 수 없어요. https 주소로 열거나 "화면 당기기"로 하세요.</div>
-    <button class="big" id="startBtn">시작하기</button>
+    <button class="big" id="startBtn">코스 게임 시작 (9홀)</button>
+    <button class="big" id="matBtn" style="background:#e8574a;color:#fff">연습 매트 (계속 치기)</button>
+    <p class="muted" style="text-align:center;font-size:12.5px">연습 매트: 공이 저절로 돌아오고, 방향은 휘두른 모양대로 정해져요</p>
   </div>
 </div>
 
@@ -184,6 +191,14 @@ function prepHole(h){
   for (const [x1,y1,x2,y2] of h.walls) segs.push([x1,y1,x2,y1],[x2,y1,x2,y2],[x2,y2,x1,y2],[x1,y2,x1,y1]);
   h._segs = segs; return h;
 }
+// 연습 매트: 폭 0.9m, 끝에 구멍, 구멍 뒤 받침대만 막혀 있고 옆·뒤는 열려 있음
+const MAT_W = 0.9;
+function makeMat(d){
+  const H = d + 0.95;
+  return {name:'연습 매트', mat:true, par:0, dist:d, W:MAT_W, H, tee:[MAT_W/2, 0.45+d], cup:[MAT_W/2, 0.45],
+    walls:[], circles:[], zones:[], _segs:[[0,0,MAT_W,0]]};
+}
+const curHole = () => G.mat ? G.matHole : HOLES[G.hole];
 
 // ---- 설정 ----
 const settings = Object.assign({names:['나','친구2','친구3','친구4'], count:1, sens:1, dev:1, flip:false, mode:'sensor'},
@@ -234,9 +249,9 @@ function startHole(i){
   G.cur = 0; G.phase = 'aim'; setAimToCup(); updateHud();
   showBanner(`${i+1}번 홀 · ${h.name}<br><small>파 ${h.par}</small>`, 1500);
 }
-function setAimToCup(){ const b=G.balls[G.cur], c=HOLES[G.hole].cup; G.aim = Math.atan2(c[1]-b.y, c[0]-b.x); }
+function setAimToCup(){ const b=G.balls[G.cur], c=curHole().cup; G.aim = Math.atan2(c[1]-b.y, c[0]-b.x); }
 function nextTurn(){
-  const h = HOLES[G.hole];
+  const h = curHole();
   const live = G.balls.map((b,i)=>i).filter(i=>!G.balls[i].done);
   if (!live.length) return holeComplete();
   const atTee = live.filter(i=>G.balls[i].strokes===0);
@@ -255,8 +270,53 @@ function scoreName(s, par){
   const d = s - par;
   return ({'-3':'알바트로스!','-2':'이글!','-1':'버디!','0':'파','1':'보기','2':'더블 보기','3':'트리플 보기'})[d] || (d>0?`+${d}`:`${d}`);
 }
+// ---- 연습 매트 ----
+function startMat(d){
+  const h = makeMat(d);
+  const st = G && G.mat ? G.stats : {tries:0, made:0};
+  const run = G && G.mat ? G.matRun : false;
+  G = {mat:true, matHole:h, hole:0, players:[{name:'연습', color:'#ff4a3d', scores:[]}],
+       balls:[{x:h.tee[0], y:h.tee[1], vx:0, vy:0, strokes:0, done:false, prev:null}], cur:0, phase:'aim', aim:-Math.PI/2, stats:st, matRun:run};
+  settings.matDist = d; saveSettings(); updateHud();
+}
+function matRollEnd(r){
+  const b = G.balls[0], h = G.matHole; G.phase = 'wait'; G.stats.tries++;
+  let msg;
+  if (r==='in'){ G.stats.made++; b.x=h.cup[0]; b.y=h.cup[1]; sndCup(); vib([40,60,160]); msg = '쏙! 들어갔어요'; }
+  else if (r==='off'){ msg = b.y>h.H ? '뒤로 빠졌어요' : `매트 밖으로 (${b.x<h.W/2?'왼쪽':'오른쪽'})`; vib(120); }
+  else {
+    const over = (h.tee[1]-b.y) - h.dist, side = (b.x-h.cup[0])*100;
+    msg = `${over<0?'짧음':'지나침'} ${Math.round(Math.abs(over)*100)}cm`;
+    if (Math.abs(side)>=2) msg += ` · ${side<0?'왼쪽':'오른쪽'} ${Math.round(Math.abs(side))}cm`;
+  }
+  $('matStatus').textContent = msg; showBanner(msg, 1300);
+  $('lastShot').textContent = `방금: ${msg}` + (G.lastTxt ? ` | ${G.lastTxt}` : ''); G.lastTxt = '';
+  updateHud();
+  setTimeout(returnBall, r==='in' ? 1300 : 1000);
+}
+function returnBall(){
+  if (!G || !G.mat) return;
+  const b = G.balls[0], h = G.matHole, rx = h.W + 0.14;
+  const pts = [[b.x,b.y],[rx,Math.max(0.2,Math.min(b.y,h.H))],[rx,h.tee[1]],[h.tee[0],h.tee[1]]];
+  const lens = []; let tot = 0;
+  for (let i=1;i<pts.length;i++){ const l = Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]); lens.push(l); tot += l; }
+  G.ret = {pts, lens, tot, t0:performance.now(), dur: 500 + tot*160};
+  G.phase = 'return'; b.inRail = true;
+}
+function updateReturn(t){
+  const R = G.ret, b = G.balls[0], k = clamp((t-R.t0)/R.dur, 0, 1);
+  let d = k*R.tot, i = 0;
+  while (i<R.lens.length-1 && d>R.lens[i]){ d -= R.lens[i]; i++; }
+  const f = R.lens[i] ? Math.min(1, d/R.lens[i]) : 1;
+  b.x = R.pts[i][0] + (R.pts[i+1][0]-R.pts[i][0])*f; b.y = R.pts[i][1] + (R.pts[i+1][1]-R.pts[i][1])*f;
+  if (k>=1){
+    b.inRail = false; b.vx = b.vy = 0; G.phase = 'aim'; G.aim = -Math.PI/2; tone(660,0.05,'triangle',0.12); updateHud();
+    if (G.matRun && settings.mode==='sensor') openSwing(false);
+  }
+}
 function onRollEnd(r){
-  const b = G.balls[G.cur], h = HOLES[G.hole], p = G.players[G.cur];
+  if (G.mat) return matRollEnd(r);
+  const b = G.balls[G.cur], h = curHole(), p = G.players[G.cur];
   G.phase = 'wait'; updateHud();
   if (r==='in'){
     b.done = true; b.x=h.cup[0]; b.y=h.cup[1]; b.vx=b.vy=0; sndCup(); vib([40,60,160]);
@@ -353,6 +413,7 @@ function step(b, h, dt){
   for (const s of h._segs) imp = Math.max(imp, collideSeg(b, s[0],s[1],s[2],s[3]));
   for (const c of h.circles) imp = Math.max(imp, collideCircle(b, c[0],c[1],c[2]));
   if (imp>0.2) sndWall(imp);
+  if (h.mat && (b.x<-BALL_R || b.x>h.W+BALL_R || b.y>h.H+BALL_R)) return 'off';
   if (sp<0.035 && slopeA<0.5 && dc>=CUP_R){ b.vx=b.vy=0; return 'stop'; }
   return null;
 }
@@ -369,9 +430,9 @@ function onMotion(e){
   const now = performance.now(); lastMotion = now;
   const v = [r.alpha||0, r.beta||0, r.gamma||0];
   const mag = Math.hypot(v[0],v[1],v[2]);
-  if (!$('swing').hidden){
-    $('meterFill').style.width = clamp(mag/fullPeak()*100,0,100)+'%';
-  }
+  const w = clamp(mag/fullPeak()*100,0,100)+'%';
+  if (!$('swing').hidden) $('meterFill').style.width = w;
+  if (G && G.mat) $('matMeterFill').style.width = SW.state==='listen' ? w : '0';
   if (SW.state==='listen') feed(v, mag, now);
 }
 function feed(v, mag, now){
@@ -405,9 +466,11 @@ function feed(v, mag, now){
     $('meterPeak').style.left = clamp(f.peak/fullPeak()*100,0,99)+'%';
     if (f.e!==n-1 || Math.abs(xNow) < 0.6*f.peak){
       // 다운스윙 동안 폰 긴 축으로 비틀린 각도 = 채 얼굴이 열리고 닫힌 정도
-      const tax = dom===2 ? 1 : 2; let twist = 0;
-      for (let i=f.s+1;i<n;i++) twist += buf[i].v[tax]*(buf[i].t-buf[i-1].t)/1000;
-      swingHit(f.peak, twist);
+      // 남은 축의 회전 = 스윙 궤도가 안쪽/바깥쪽으로 기운 정도
+      const tax = dom===2 ? 1 : 2, pax = 3-dom-tax; let twist = 0, pathA = 0, domA = 0;
+      for (let i=f.s+1;i<n;i++){ const dt=(buf[i].t-buf[i-1].t)/1000; twist += buf[i].v[tax]*dt; pathA += buf[i].v[pax]*dt; domA += buf[i].v[dom]*dt; }
+      const path = Math.atan2(pathA*Math.sign(domA||1), Math.abs(domA)||1)*180/Math.PI;
+      swingHit(f.peak, twist, path);
     }
   }
 }
@@ -416,12 +479,14 @@ function swingText(peak, speed, dev){
   return `스윙 ${Math.round(peak)}°/s → 공 ${speed.toFixed(1)}m/s (평지 약 ${d.toFixed(1)}m)` +
     (dev ? ` · ${dev>0?'오른쪽':'왼쪽'}으로 ${Math.abs(dev).toFixed(1)}° 빠짐` : '');
 }
-function swingHit(peak, twist){
+function swingHit(peak, twist, path=0){
   SW.state = 'off'; clearSwingTimers();
   const frac = clamp((peak-45)/(fullPeak()-45), 0, 1);
   const speed = Math.max(0.15, VMAX*Math.pow(frac, 1.1));
+  // 방향 = 채 얼굴 비틀림(주) + 궤도 기울기(부). 연습 매트는 항상 센서 방향을 씀
+  const lvl = G && G.mat && !SW.practice ? 2 : +settings.dev;
   let dev = 0;
-  if (+settings.dev){ const k = +settings.dev===1?0.25:0.5, cap = +settings.dev===1?6:12; dev = clamp(twist*k*(settings.flip?-1:1), -cap, cap); }
+  if (lvl){ const k = lvl===1?0.25:0.5, cap = G && G.mat ? 15 : (lvl===1?6:12); dev = clamp((twist*k + path*0.3)*(settings.flip?-1:1), -cap, cap); }
   const txt = swingText(peak, speed, dev);
   if (SW.practice){
     sndHit(); vib(35);
@@ -430,45 +495,50 @@ function swingHit(peak, twist){
     SW.timers.push(setTimeout(()=>{ if(!$('swing').hidden) armSwing(); }, 1800));
     return;
   }
-  $('swing').hidden = true; $('lastShot').textContent = txt;
+  $('swing').hidden = true; $('lastShot').textContent = txt; if (G) G.lastTxt = txt;
   shoot(speed, dev);
 }
 function clearSwingTimers(){ SW.timers.forEach(t=>{clearTimeout(t);clearInterval(t);}); SW.timers=[]; }
+// 연습 매트에선 가림막 없이 아래 상태줄에 글자를 씀
+const onMat = () => G && G.mat && !SW.practice;
+function swMsg(big, info){
+  $('swingBig').innerHTML = big; $('swingInfo').innerHTML = info || '';
+  if (onMat()) $('matStatus').innerHTML = big.replace(/<br>.*$/,'') + (info ? `<div style="font-size:12.5px;font-weight:500;color:#9cc3a8">${info}</div>` : '');
+}
 function openSwing(practice){
   if (!practice && (!G || G.phase!=='aim')) return;
   ac(); SW.practice = practice; clearSwingTimers();
-  $('menu').hidden = true; $('swing').hidden = false; $('swingRetry').hidden = true;
+  $('menu').hidden = true; $('swingRetry').hidden = true;
+  $('swing').hidden = onMat();
   $('swingTitle').textContent = practice ? '연습 스윙' : `${G.players[G.cur].name} · ${G.balls[G.cur].strokes+1}타째`;
   $('meterFill').style.width='0'; $('meterPeak').style.left='0';
-  $('swingInfo').textContent = practice ? '공은 안 쳐요. 세기만 확인해 보세요.' : '';
-  SW.state = 'countdown'; let c = 2;
-  const tick = () => { $('swingBig').innerHTML = `폰을 두 손으로 채처럼 쥐세요<br><span style="font-size:52px">${c}</span>`; tone(520,0.08,'sine',0.15); };
+  swMsg('', practice ? '공은 안 쳐요. 세기만 확인해 보세요.' : '');
+  SW.state = 'countdown'; let c = onMat() ? 1 : 2;
+  const tick = () => { swMsg(onMat() ? '자세 잡으세요…' : `폰을 두 손으로 채처럼 쥐세요<br><span style="font-size:52px">${c}</span>`); tone(520,0.08,'sine',0.15); };
   tick();
   const iv = setInterval(()=>{ c--; if (c<=0){ clearInterval(iv); armSwing(); } else tick(); }, 900);
   SW.timers.push(iv);
+  updateHud();
+}
+function swingFail(big, info){
+  SW.state='off'; clearSwingTimers(); swMsg(big, info);
+  if (onMat()){ G.matRun = false; updateHud(); } else $('swingRetry').hidden = false;
 }
 function armSwing(){
   clearSwingTimers();
   SW.state='listen'; SW.buf=[]; SW.started=false; SW.peak=0; SW.armT=performance.now(); SW.lastActive=SW.armT;
-  $('swingBig').innerHTML = '삑! 지금 휘두르세요<br><span style="font-size:15px;color:#9cc3a8;font-weight:600">뒤로 뺐다가 → 앞으로</span>';
+  swMsg('삑! 지금 휘두르세요<br><span style="font-size:15px;color:#9cc3a8;font-weight:600">뒤로 뺐다가 → 앞으로</span>');
   $('meterPeak').style.left='0'; sndBeep(); vib(90);
   SW.timers.push(setInterval(()=>{
     const now = performance.now();
     if (SW.state!=='listen') return;
-    if (now-SW.armT>1500 && now-lastMotion>1000){
-      SW.state='off'; clearSwingTimers();
-      $('swingBig').textContent = '센서 신호가 없어요';
-      $('swingInfo').innerHTML = 'https 주소로 열었는지 확인하거나,<br>메뉴에서 "화면 당기기"로 바꿔 주세요.';
-      $('swingRetry').hidden = false;
-    } else if (now-SW.armT>15000){
-      SW.state='off'; clearSwingTimers();
-      $('swingBig').textContent = '스윙을 못 알아챘어요';
-      $('swingInfo').textContent = '뒤로 뺐다가 앞으로, 조금 더 확실하게 휘둘러 보세요.';
-      $('swingRetry').hidden = false;
-    }
+    if (now-SW.armT>1500 && now-lastMotion>1000)
+      swingFail('센서 신호가 없어요', 'https 주소로 열었는지 확인하거나, 메뉴에서 "화면 당기기"로 바꿔 주세요.');
+    else if (now-SW.armT>(onMat()?30000:15000))
+      swingFail('스윙을 못 알아챘어요', '뒤로 뺐다가 앞으로, 조금 더 확실하게 휘둘러 보세요.');
   }, 250));
 }
-function closeSwing(){ SW.state='off'; clearSwingTimers(); $('swing').hidden = true; }
+function closeSwing(){ SW.state='off'; clearSwingTimers(); $('swing').hidden = true; if (G && G.mat){ G.matRun = false; updateHud(); } }
 async function enableSensor(){
   try{
     if (typeof DeviceMotionEvent!=='undefined' && typeof DeviceMotionEvent.requestPermission==='function'){
@@ -493,13 +563,16 @@ function draw(t){
   const {cw, ch, dpr} = view;
   ctx.setTransform(dpr,0,0,dpr,0,0); ctx.fillStyle = '#173222'; ctx.fillRect(0,0,cw,ch);
   if (!G) return;
-  const h = HOLES[G.hole], m = 0.3;
+  const h = curHole(), m = 0.3;
   const s = Math.min(cw/(h.W+2*m), ch/(h.H+2*m)); view.s = s; view.ox = (cw-h.W*s)/2; view.oy = (ch-h.H*s)/2;
   ctx.setTransform(dpr*s,0,0,dpr*s,dpr*view.ox,dpr*view.oy);
   const px = 1/s;
+  if (h.mat) drawMat(h, s, t);
+  else {
   // 나무 테두리 + 잔디 줄무늬
   ctx.fillStyle = '#6b4a2b'; rr(-0.16,-0.16,h.W+0.32,h.H+0.32,0.14); ctx.fill();
   for (let y=0, k=0; y<h.H; y+=0.5, k++){ ctx.fillStyle = k%2 ? '#4fa45f' : '#58ae69'; ctx.fillRect(0,y,h.W,Math.min(0.5,h.H-y)+0.002); }
+  }
   // 구역
   for (const z of h.zones){
     const [x1,y1,x2,y2] = z.r, w=x2-x1, hh=y2-y1;
@@ -528,7 +601,7 @@ function draw(t){
     ctx.restore();
   }
   // 티 매트
-  ctx.fillStyle = 'rgba(255,255,255,.18)'; rr(h.tee[0]-0.35,h.tee[1]-0.2,0.7,0.4,0.05); ctx.fill();
+  if (!h.mat){ ctx.fillStyle = 'rgba(255,255,255,.18)'; rr(h.tee[0]-0.35,h.tee[1]-0.2,0.7,0.4,0.05); ctx.fill(); }
   // 벽, 통나무
   for (const [x1,y1,x2,y2] of h.walls){
     ctx.fillStyle = '#7a5230'; rr(x1,y1,x2-x1,y2-y1,0.04); ctx.fill();
@@ -545,14 +618,14 @@ function draw(t){
   ctx.fillStyle = '#0c1a0f'; ctx.beginPath(); ctx.arc(cx,cy,CUP_R,0,7); ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 0.014; ctx.stroke();
   const cb = G.balls[G.cur];
-  const flagA = Math.hypot(cb.x-cx, cb.y-cy) < 1.2 ? 0.3 : 1;
+  const flagA = h.mat ? 0 : Math.hypot(cb.x-cx, cb.y-cy) < 1.2 ? 0.3 : 1;
   ctx.globalAlpha = flagA;
   ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 0.025; ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx,cy-0.85); ctx.stroke();
   const wave = Math.sin(t*0.004)*0.03;
   ctx.fillStyle = '#e8453c'; ctx.beginPath(); ctx.moveTo(cx,cy-0.85); ctx.lineTo(cx+0.4,cy-0.75+wave); ctx.lineTo(cx,cy-0.62); ctx.closePath(); ctx.fill();
   ctx.globalAlpha = 1;
   // 조준선
-  if (G.phase==='aim'){
+  if (G.phase==='aim' && (!h.mat || settings.mode==='touch')){
     const p = settings.mode==='touch' ? (drag ? drag.p : 0) : 1;
     const L = settings.mode==='touch' ? 0.35 + p*2.6 : 1.6;
     ctx.strokeStyle = G.players[G.cur].color; ctx.globalAlpha = 0.9; ctx.lineWidth = 0.03; ctx.setLineDash([0.08,0.07]);
@@ -565,15 +638,51 @@ function draw(t){
   // 공
   G.balls.forEach((b,i)=>{
     if (b.done) return;
-    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(b.x+0.015,b.y+0.022,BALL_R,BALL_R*0.8,0,0,7); ctx.fill();
-    ctx.fillStyle = G.players[i].color; ctx.beginPath(); ctx.arc(b.x,b.y,BALL_R,0,7); ctx.fill();
+    const R = h.mat ? Math.max(BALL_R, 6*px) : BALL_R;   // 매트는 화면이 좁아 공을 조금 크게 그림
+    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(b.x+R*0.3,b.y+R*0.45,R,R*0.8,0,0,7); ctx.fill();
+    ctx.fillStyle = G.players[i].color; ctx.beginPath(); ctx.arc(b.x,b.y,R,0,7); ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 1.2*px; ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.arc(b.x-0.015,b.y-0.017,BALL_R*0.3,0,7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.arc(b.x-R*0.3,b.y-R*0.34,R*0.3,0,7); ctx.fill();
     if (i===G.cur && G.phase==='aim'){
       ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2*px;
-      ctx.beginPath(); ctx.arc(b.x,b.y,BALL_R+0.05+Math.sin(t*0.006)*0.02,0,7); ctx.stroke();
+      ctx.beginPath(); ctx.arc(b.x,b.y,R+0.05+Math.sin(t*0.006)*0.02,0,7); ctx.stroke();
     }
   });
+}
+
+function drawMat(h, s, t){
+  const px = 1/s, W = h.W, H = h.H;
+  // 공 돌아오는 레일(오른쪽)
+  ctx.fillStyle = '#5a5f66'; rr(W+0.06, 0.1, 0.16, h.tee[1]-0.1+0.12, 0.06); ctx.fill();
+  ctx.fillStyle = '#2b2f34'; rr(W+0.09, 0.13, 0.10, h.tee[1]-0.16+0.12, 0.04); ctx.fill();
+  // 매트 바닥 + 테두리
+  ctx.fillStyle = '#1d5a2c'; ctx.fillRect(-0.04,-0.04,W+0.08,H+0.08);
+  ctx.fillStyle = '#3aa34c'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = 'rgba(255,255,255,.045)';
+  for (let x=0.03; x<W; x+=0.06) ctx.fillRect(x,0,0.025,H);
+  // 구멍 뒤 받침대
+  ctx.fillStyle = '#8a5a33'; ctx.fillRect(-0.04,-0.14,W+0.08,0.12);
+  // 가운데 줄 + 거리 눈금
+  ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1.5*px;
+  ctx.setLineDash([0.06,0.06]); ctx.beginPath(); ctx.moveTo(W/2, h.cup[1]+0.15); ctx.lineTo(W/2, h.tee[1]-0.12); ctx.stroke(); ctx.setLineDash([]);
+  const labels = [];
+  for (let d=0.5; d<h.dist; d+=0.5){
+    const y = h.tee[1]-d, big = Math.abs(d-Math.round(d))<1e-6, half = big ? 0.12 : 0.06;
+    ctx.beginPath(); ctx.moveTo(W/2-half, y); ctx.lineTo(W/2+half, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0.02, y); ctx.lineTo(0.08, y); ctx.moveTo(W-0.08, y); ctx.lineTo(W-0.02, y); ctx.stroke();
+    if (big) labels.push([d, y]);
+  }
+  // 거리 동그라미 (사진처럼 공 앞쪽 과녁)
+  ctx.fillStyle = 'rgba(10,40,20,.55)';
+  for (const d of [0.4, 0.75]){ ctx.beginPath(); ctx.ellipse(W/2, h.tee[1]-d, 0.09, 0.05, 0, 0, 7); ctx.fill(); }
+  // 출발점
+  ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2*px;
+  ctx.beginPath(); ctx.moveTo(W/2-0.15, h.tee[1]+0.1); ctx.lineTo(W/2+0.15, h.tee[1]+0.1); ctx.stroke();
+  // 글자는 화면 좌표로
+  ctx.save(); ctx.setTransform(view.dpr,0,0,view.dpr,0,0);
+  ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.font = '600 11px system-ui,sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+  for (const [d,y] of labels) ctx.fillText(d+'m', view.ox - 6, view.oy + y*s);
+  ctx.restore();
 }
 
 // ---- 메인 루프 ----
@@ -582,15 +691,34 @@ function frame(t){
   const dt = Math.min(0.05, (t-lastT)/1000); lastT = t;
   if (G && G.phase==='rolling'){
     acc += dt; const H = 1/240;
-    while (acc>=H){ acc-=H; const r = step(G.balls[G.cur], HOLES[G.hole], H); if (r){ acc=0; onRollEnd(r); break; } }
+    while (acc>=H){ acc-=H; const r = step(G.balls[G.cur], curHole(), H); if (r){ acc=0; onRollEnd(r); break; } }
   } else acc = 0;
+  if (G && G.phase==='return') updateReturn(t);
   draw(t); requestAnimationFrame(frame);
 }
 
 // ---- 화면 조작 ----
 function updateHud(){
   if (!G) return;
-  const h = HOLES[G.hole], p = G.players[G.cur], b = G.balls[G.cur];
+  const h = curHole(), p = G.players[G.cur], b = G.balls[G.cur];
+  const mat = !!G.mat, touch0 = settings.mode==='touch';
+  $('aimRow').hidden = mat; $('matRow').hidden = !mat; $('matStatus').hidden = !mat; $('matMeter').hidden = !mat || touch0;
+  if (mat){
+    const st = G.stats;
+    $('holeInfo').textContent = `연습 매트 · 구멍까지 ${h.dist}m`;
+    $('turnName').textContent = `시도 ${st.tries} · 성공 ${st.made}${st.tries?` (${Math.round(st.made/st.tries*100)}%)`:''}`;
+    $('turnDot').style.background = p.color;
+    for (const bt of $('matDistSeg').children) bt.classList.toggle('on', +bt.dataset.d===h.dist);
+    $('swingBtn').hidden = touch0;
+    $('swingBtn').disabled = false;
+    $('swingBtn').textContent = G.matRun ? '멈추기' : '연습 시작';
+    $('swingBtn').style.background = G.matRun ? '#4a2620' : '';
+    $('swingBtn').style.color = G.matRun ? '#fff' : '';
+    if (touch0 && G.phase==='aim') $('matStatus').textContent = '공 반대쪽으로 당겼다 놓으세요';
+    else if (!G.matRun && G.phase==='aim' && !$('matStatus').textContent) $('matStatus').textContent = '[연습 시작]을 누르고 폰을 쥐세요';
+    return;
+  }
+  $('swingBtn').textContent = '스윙 준비'; $('swingBtn').style.background = ''; $('swingBtn').style.color = '';
   $('holeInfo').textContent = `${G.hole+1}/${HOLES.length}홀 · ${h.name} · 파 ${h.par}`;
   $('turnName').textContent = `${p.name} 차례 · ${b.strokes+(G.phase==='aim'?1:0)}타째`;
   $('turnDot').style.background = p.color;
@@ -604,6 +732,7 @@ function toWorld(e){ const r = cv.getBoundingClientRect(); return {x:(e.clientX-
 function aimAt(e){ const w = toWorld(e), b = G.balls[G.cur]; if (Math.hypot(w.x-b.x,w.y-b.y)>0.08) G.aim = Math.atan2(w.y-b.y, w.x-b.x); }
 cv.addEventListener('pointerdown', e=>{
   if (!G || G.phase!=='aim') return; ac();
+  if (G.mat && settings.mode!=='touch') return;   // 매트는 방향을 센서로만
   try{ cv.setPointerCapture(e.pointerId); }catch(_){}
   if (settings.mode==='touch') drag = {sx:e.clientX, sy:e.clientY, p:0};
   else { drag = {aim:true}; aimAt(e); }
@@ -633,7 +762,19 @@ for (const [id,d] of [['aimL',-1],['aimR',1]]){
   el.addEventListener('pointerdown', e=>{ e.preventDefault(); nudge(d); clearInterval(aimHold); let n=0; aimHold = setInterval(()=>{ n++; nudge(n>8?d*1.5:d*0.5); }, 80); });
   for (const ev of ['pointerup','pointerleave','pointercancel']) el.addEventListener(ev, ()=>clearInterval(aimHold));
 }
-$('swingBtn').onclick = () => openSwing(false);
+$('swingBtn').onclick = () => {
+  if (G && G.mat){
+    if (G.matRun){ G.matRun = false; SW.state='off'; clearSwingTimers(); $('matStatus').textContent = '멈췄어요'; $('matMeterFill').style.width='0'; updateHud(); }
+    else { G.matRun = true; $('matStatus').textContent = ''; updateHud(); openSwing(false); }
+    return;
+  }
+  openSwing(false);
+};
+$('matDistSeg').onclick = e => {
+  const d = +e.target.dataset.d; if (!d || !G || !G.mat || !(G.phase==='aim')) return;
+  const run = G.matRun; SW.state='off'; clearSwingTimers();
+  startMat(d); if (run && settings.mode==='sensor') openSwing(false);
+};
 $('swingCancel').onclick = closeSwing;
 $('swingRetry').onclick = () => { $('swingRetry').hidden = true; $('swingInfo').textContent=''; armSwing(); };
 
@@ -682,10 +823,20 @@ $('startBtn').onclick = async () => {
   keepAwake();
   $('startScreen').hidden = true; resize(); newGame();
 };
+$('matBtn').onclick = async () => {
+  ac();
+  if (settings.mode==='sensor'){
+    const ok = await enableSensor();
+    if (!ok){ alert('센서 사용을 허용하지 않아서 "화면 당기기"로 바꿀게요.'); settings.mode='touch'; saveSettings(); renderMode(); }
+  }
+  keepAwake();
+  $('startScreen').hidden = true; resize(); G = null; startMat(settings.matDist || 3);
+};
 $('menuBtn').onclick = () => {
   if (!G) return;
   $('settingsMenu').appendChild($('settings')); renderSettings();
-  $('menuScore').innerHTML = G.players[0].scores.length ? `<div style="overflow-x:auto">${scoreTable()}</div>` : '<p class="muted">아직 끝난 홀이 없어요</p>';
+  if (G.mat){ G.matRun = false; SW.state='off'; clearSwingTimers(); updateHud(); }
+  $('menuScore').innerHTML = G.mat ? `<p class="muted">시도 ${G.stats.tries}번 · 성공 ${G.stats.made}번</p>` : G.players[0].scores.length ? `<div style="overflow-x:auto">${scoreTable()}</div>` : '<p class="muted">아직 끝난 홀이 없어요</p>';
   $('menu').hidden = false;
 };
 $('mResume').onclick = () => { $('menu').hidden = true; };
